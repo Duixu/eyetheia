@@ -25,6 +25,7 @@ import mediapipe as mp
 
 from utils.utils import *
 from utils.config import MID_X, MID_Y, LR, EPOCH, BATCH_SIZE
+from utils.OneEuroTuner import OneEuroTuner
 
 from .GazeDataLogger import GazeDataLogger
 from .GazeModel import GazeModel
@@ -279,6 +280,7 @@ class GazeTracker:
         gaze_x_px, gaze_y_px = MID_X, MID_Y
         prev_x, prev_y = MID_X, MID_Y
 
+        tuner = OneEuroTuner(window_name="EyeTheia Controls")
         smoothing_alpha = 0.2
 
         start_time = time.perf_counter()
@@ -289,6 +291,11 @@ class GazeTracker:
                 if not success:
                     print("Error reading from the webcam.")
                     break
+
+                # --- Update OneEuro parameters live (trackbars) ---
+                smoothing_alpha, (freq, mincutoff, beta, dcutoff) = tuner.update_filters(
+                    self.gaze_filter_x, self.gaze_filter_y
+                )
 
                 img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img_mp = face_mesh.process(img_rgb)
@@ -320,11 +327,10 @@ class GazeTracker:
                         gx_px = float(self.gaze_filter_x.filter(float(gx_px), timestamp))
                         gy_px = float(self.gaze_filter_y.filter(float(gy_px), timestamp))
 
-                        # store last filtered values
+                        # Extra smoothing (EMA) on top of OneEuro output
                         gaze_x_px = prev_x + smoothing_alpha * (gx_px - prev_x)
                         gaze_y_px = prev_y + smoothing_alpha * (gy_px - prev_y)
 
-                        # update previous position for next frame
                         prev_x, prev_y = gaze_x_px, gaze_y_px
 
                 # White fullscreen background
@@ -333,6 +339,18 @@ class GazeTracker:
                 # Draw solid black dot at filtered gaze position
                 cx, cy = int(gaze_x_px), int(gaze_y_px)
                 cv2.circle(white_bg, (cx, cy), 23, (0, 0, 0), 2)
+
+                # Show current OneEuro params + alpha
+                cv2.putText(
+                    white_bg,
+                    f"OneEuroFilter: freq={freq}Hz  mincutoff={mincutoff:.2f}  beta={beta:.3f}  dcutoff={dcutoff:.2f}  alpha={smoothing_alpha:.2f}",
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 0, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
 
                 # (Optionnel) hint utilisateur
                 cv2.putText(
@@ -360,4 +378,5 @@ class GazeTracker:
                     )
 
         cv2.destroyWindow(self.window_name)
-        #self.logger.save_data()
+        cv2.destroyWindow("EyeTheia Controls")
+        # self.logger.save_data()
