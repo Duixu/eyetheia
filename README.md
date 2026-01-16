@@ -79,7 +79,7 @@ This mode exposes an API for external clients (e.g., JavaScript frontends using 
 As a demonstration, we have developed a **JavaScript frontend** that interacts directly with the tracker API.  
 It handles webcam capture via **MediaPipe**, sends facial landmarks to the backend, and receives real-time gaze predictions.
 
-- [pygaze.js – Calypso frontend example](https://git.interactions-team.fr/INTERACTIONS/calypso/src/branch/main/src/experiment/trackers/pygaze.js)
+- [pygaze.js – Calypso frontend example](https://git.interactions-team.fr/INTERACTIONS/calypso/src/branch/main/lib/web/survey/trackers/pygaze.js)
 
 This implementation can serve as a reference for integrating **EyeTheia** into web-based experimental setups or **interactive applications** involving gaze-based control or accessibility.
 
