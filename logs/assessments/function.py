@@ -756,17 +756,37 @@ def compute_pair_metrics(
     return metrics
 
 
+def compute_avg_frame_time_ms(gaze_df: pd.DataFrame, intervals):
+    """
+    Compute average time per frame (ms) restricted to image-display intervals.
+    """
+    if gaze_df.empty or not intervals:
+        return np.nan
+
+    gaze_df = gaze_df.sort_values("timestamp")
+    t = gaze_df["timestamp"].to_numpy(dtype=float)
+
+    # keep only samples inside image intervals
+    mask = _mask_t_in_intervals(t, intervals)
+    t = t[mask]
+
+    if len(t) < 2:
+        return np.nan
+
+    dt = np.diff(t)
+    return float(np.mean(dt))
+
+
 # ---------------------------------------------------------
 # Analyse globale sur un dossier db/
 # ---------------------------------------------------------
-
 def analyze_all_dbs(db_root: str, max_align_gap_ms: float = 50.0):
     """
     Analyse tous les fichiers .db dans db_root.
 
     Retourne :
-      - df_sessions : métriques par tracker (jitter, fps, ...)
-      - df_pairs    : métriques par paire (Seeso vs tracker Python)
+      - df_sessions : métriques par tracker/passation (jitter, fps, avg_frame_time_ms, ...)
+      - df_pairs    : métriques par paire (SeeSo vs A1), uniquement sur les intervalles images
       - sessions    : liste brute des sessions (pour analyses avancées)
     """
     db_root = Path(db_root)
@@ -782,68 +802,78 @@ def analyze_all_dbs(db_root: str, max_align_gap_ms: float = 50.0):
             continue
 
         for s in sess_list:
+            # zones AOI (utilise events "images" parsés)
             gaze_zoned = assign_zones_to_gaze(s["gaze"], s["images"])
             s["gaze_zoned"] = gaze_zoned
 
+            # stats "single tracker" globales
             stats_single = compute_series_stats(gaze_zoned)
-            s["metrics_single"] = stats_single
 
+            # avg frame time (ms) MAIS seulement pendant les intervalles "images affichées"
+            intervals = []
+            if "events" in s and isinstance(s["events"], pd.DataFrame) and not s["events"].empty:
+                intervals = get_test_images_target_intervals(s["events"])
+
+            # compute_avg_frame_time_ms() doit exister dans function.py (voir note en dessous)
+            stats_single["avg_frame_time_ms"] = compute_avg_frame_time_ms(s["gaze"], intervals)
+
+            s["metrics_single"] = stats_single
             sessions.append(s)
 
     # ---- df_sessions : une ligne par tracker/passation ----
     session_rows = []
     for s in sessions:
         row = {
-            "identifier": s["identifier"],
-            "experiment_type": s["experiment_type"],
-            "tracker": s["tracker"],
-            "db_path": str(s["db_path"]),
+            "identifier": s.get("identifier"),
+            "experiment_type": s.get("experiment_type"),
+            "tracker": s.get("tracker"),
+            "db_path": str(s.get("db_path")),
         }
-        row.update(s["metrics_single"])
+        row.update(s.get("metrics_single", {}))
         session_rows.append(row)
 
     df_sessions = pd.DataFrame(session_rows)
 
-    # ---- df_pairs : Seeso vs autres trackers ----
     pair_rows = []
     groups = defaultdict(list)
     for s in sessions:
-        key = (s["identifier"], s["experiment_type"])
+        key = (s.get("identifier"), s.get("experiment_type"))
         groups[key].append(s)
 
     for (identifier, exp_type), sess_list in groups.items():
         # référence SeeSo
-        ref_list = [s for s in sess_list if s["tracker"] == "SeeSo"]
+        ref_list = [s for s in sess_list if s.get("tracker") == "SeeSo"]
         if not ref_list:
             continue
         ref = ref_list[0]
 
-        imgs = ref["images"]
-        # milieu de l'écran fixé par la résolution connue
-        screen_mid_x = SCREEN_WIDTH / 2.0
+        # Intervalles images affichées (protocol-aware)
+        image_intervals = []
+        if "events" in ref and isinstance(ref["events"], pd.DataFrame) and not ref["events"].empty:
+            image_intervals = get_test_images_target_intervals(ref["events"])
 
-        if not imgs.empty:
-            events_ref = ref["events"]
-            image_intervals = get_test_images_target_intervals(events_ref)
-        else:
-            image_intervals = []
+        if not image_intervals:
+            continue
+
+        screen_mid_x = SCREEN_WIDTH / 2.0
 
         for other in sess_list:
             if other is ref:
                 continue
 
-            aligned = align_gaze_series(
-                ref["gaze_zoned"], other["gaze_zoned"], max_align_gap_ms
-            )
+            if other.get("tracker") != "A1":
+                continue
+
+            aligned = align_gaze_series(ref["gaze_zoned"], other["gaze_zoned"], max_gap_ms=max_align_gap_ms)
             if aligned.empty:
                 continue
 
-            # zones côté SeeSo (on ne s'en sert ici que pour t_ref)
+            # zones côté SeeSo (uniquement pour t_ref)
             ref_z = ref["gaze_zoned"][["timestamp", "zone"]].rename(
                 columns={"timestamp": "t_ref", "zone": "zone_ref"}
             )
 
-            # zones côté tracker Python : strict + marges 5/10/20
+            # zones côté A1 : strict + marges 5/10/20
             oth_z = other["gaze_zoned"][[
                 "timestamp",
                 "zone",
@@ -860,9 +890,7 @@ def analyze_all_dbs(db_root: str, max_align_gap_ms: float = 50.0):
                 }
             )
 
-            aligned2 = aligned.merge(ref_z, on="t_ref", how="left").merge(
-                oth_z, on="t_other", how="left"
-            )
+            aligned2 = aligned.merge(ref_z, on="t_ref", how="left").merge(oth_z, on="t_other", how="left")
 
             metrics_pair = compute_pair_metrics(
                 aligned2,
@@ -877,10 +905,10 @@ def analyze_all_dbs(db_root: str, max_align_gap_ms: float = 50.0):
             row = {
                 "identifier": identifier,
                 "experiment_type": exp_type,
-                "ref_tracker": ref["tracker"],
-                "other_tracker": other["tracker"],
-                "ref_db_path": str(ref["db_path"]),
-                "other_db_path": str(other["db_path"]),
+                "ref_tracker": ref.get("tracker"),
+                "other_tracker": other.get("tracker"),
+                "ref_db_path": str(ref.get("db_path")),
+                "other_db_path": str(other.get("db_path")),
             }
             row.update(metrics_pair)
             pair_rows.append(row)
