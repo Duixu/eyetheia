@@ -21,25 +21,10 @@ import re
 from base64 import b64decode
 
 from tracker.CalibrationDataset import CalibrationDataset
-from utils.utils import pixels_to_gaze_cm, normalize_MPIIFaceGaze
+from utils.utils import FaceLandmarks, pixels_to_gaze_cm, normalize_MPIIFaceGaze
 from routes.dependency import get_tracker, get_capture_points, get_screen
 
 router = APIRouter()
-
-
-class FaceLandmarks:
-    """Helper wrapper for MediaPipe landmarks."""
-    def __init__(self, landmarks):
-        self.landmark = [Landmark(pt) for pt in landmarks]
-
-
-class Landmark:
-    """Single landmark point (x, y, z)."""
-    def __init__(self, pt):
-        self.x = pt["x"]
-        self.y = pt["y"]
-        self.z = pt["z"]
-
 
 @router.post("/submit_calibration")
 async def submit_calibration(

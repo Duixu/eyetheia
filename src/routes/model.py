@@ -26,7 +26,7 @@ import json
 import re
 
 from routes.dependency import get_tracker, get_screen
-from utils.utils import denormalized_MPIIFaceGaze, gaze_cm_to_pixels
+from utils.utils import FaceLandmarks, denormalized_MPIIFaceGaze, gaze_cm_to_pixels
 
 router = APIRouter()
 

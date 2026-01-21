@@ -18,6 +18,8 @@ import scipy.io as sio
 from typing import Optional, Tuple, Dict, Union
 import torch
 import gc
+import re
+import base64
 import mediapipe as mp
 from tqdm import tqdm
 import pandas as pd
@@ -26,6 +28,19 @@ import os
 from sklearn.model_selection import GroupKFold
 
 from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT, GAZE_RANGE_CM, MID_X, MID_Y
+
+class FaceLandmarks:
+    """Helper wrapper for MediaPipe landmarks."""
+    def __init__(self, landmarks):
+        self.landmark = [Landmark(pt) for pt in landmarks]
+
+
+class Landmark:
+    """Single landmark point (x, y, z)."""
+    def __init__(self, pt):
+        self.x = pt["x"]
+        self.y = pt["y"]
+        self.z = pt["z"]
 
 # MediaPipe marker IDs for facial landmarks
 LEFT_EYE = [33, 133, 159, 160, 158, 144]
@@ -110,6 +125,21 @@ def draw_bounding_boxes(frame: np.ndarray, face_bbox: Optional[Tuple[int, int, i
 
     return frame
 
+def decode_image_bytes(image_bytes: bytes) -> np.ndarray:
+    """
+    Decode encoded image bytes (JPEG/PNG) into OpenCV BGR image.
+
+    :param image_bytes: Encoded image bytes.
+    :type image_bytes: bytes
+    :return: Decoded image (BGR).
+    :rtype: numpy.ndarray
+    :raises ValueError: If decoding fails.
+    """
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Invalid image bytes (cv2.imdecode returned None)")
+    return img
 
 def preprocess_roi(roi: np.ndarray, size: tuple[int, int] = (224, 224)) -> np.ndarray:
     """
