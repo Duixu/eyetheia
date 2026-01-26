@@ -42,6 +42,7 @@ Stages emitted during calibration:
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 import json
+import asyncio
 
 from tracker.CalibrationDataset import CalibrationDataset
 from utils.utils import decode_image_bytes, FaceLandmarks, pixels_to_gaze_cm, normalize_MPIIFaceGaze
@@ -94,9 +95,11 @@ async def ws_calibration(
                 continue
 
             face_landmarks = FaceLandmarks(landmarks_data)
-            face_input, left_eye_input, right_eye_input, face_grid_input = gaze_tracker.extract_features(
-                img, face_landmarks, screen_width, screen_height
-            )
+            
+            features = await asyncio.to_thread(gaze_tracker.extract_features, 
+                                               img, face_landmarks, screen_width, screen_height)
+            
+            face_input, left_eye_input, right_eye_input, face_grid_input = features
 
             match gaze_tracker.mp:
                 case "itracker_baseline.tar":
