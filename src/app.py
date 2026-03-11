@@ -20,7 +20,7 @@ from typing import Tuple
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routes import config, ws_calibration, ws_model
+from routes import config, ws_calibration, ws_model, onnx_router
 from routes.dependency import get_tracker, get_capture_points, get_screen
 from tracker.GazeTracker import GazeTracker
 
@@ -68,8 +68,9 @@ def create_app(
     )
 
     # Routers
-    app.include_router(config.router, prefix="/config")
-    
+    app.include_router(config.router)
+    app.include_router(onnx_router)
+
     # WebSocket routers (binary WS)
     app.include_router(ws_calibration.router)
     app.include_router(ws_model.router)
