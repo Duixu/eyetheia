@@ -24,6 +24,14 @@ def parse_args():
     parser.add_argument("--img-root", default="../dataset/MPIIFaceGaze",
                         help="Root folder containing raw MPIIFaceGaze participant folders.")
 
+    # Model choice
+    parser.add_argument(
+        "--model",
+        choices=["v1", "uf"],
+        default="v1",
+        help="Model architecture: 'v1' (baseline GazeModel) or 'uf' (EyeTheia-UF)."
+    )
+
     # Training
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -32,6 +40,14 @@ def parse_args():
     parser.add_argument("--grad-accum", type=int, default=1)
     parser.add_argument("--amp", action="store_true", help="Use automatic mixed precision training.")
     parser.add_argument("--channels-last", action="store_true", help="Use channels_last memory format (may boost performance).")
+
+    # UF params
+    parser.add_argument("--uf-logvar-min", type=float, default=-8.0,
+                        help="UF: minimum clamp for log-variance.")
+    parser.add_argument("--uf-logvar-max", type=float, default=4.0,
+                        help="UF: maximum clamp for log-variance.")
+    parser.add_argument("--uf-l1-weight", type=float, default=0.0,
+                        help="UF: optional extra L1/SmoothL1 weight (0 disables).")
 
     # DataLoader
     parser.add_argument("--num-workers", type=int, default=8)
@@ -75,4 +91,9 @@ if __name__ == "__main__":
         save_every=args.save_every,
         resume=args.resume,
         device=device,
+        smooth_l1_delta=args.smooth_l1_delta,
+        model_name=args.model,
+        uf_logvar_min=args.uf_logvar_min,
+        uf_logvar_max=args.uf_logvar_max,
+        uf_l1_weight=args.uf_l1_weight,
     )
