@@ -7,3 +7,5 @@ doc/
 .pytest_cache
 .conda
 dataset/
+artifacts/
+src/experiments/
