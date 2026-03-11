@@ -15,7 +15,7 @@ to predict the user's gaze position.
 
 import torch
 import torch.nn as nn
-
+from typing import List, Tuple
 
 class FeatureImageModel(nn.Module):
     """
@@ -116,6 +116,43 @@ class FaceGridModel(nn.Module):
         x = self.fc(x)
         return x
 
+def _make_mlp(in_dim: int, hidden_dims: List[int], out_dim: int, dropout: float = 0.1) -> nn.Sequential:
+    """
+    Simple MLP builder: Linear -> ReLU -> Dropout (xN) -> Linear.
+    """
+    layers: List[nn.Module] = []
+    d = in_dim
+
+    for h in hidden_dims:
+        layers.append(nn.Linear(d, h))
+        layers.append(nn.ReLU(inplace=True))
+        if dropout and dropout > 0.0:
+            layers.append(nn.Dropout(dropout))
+        d = h
+
+    layers.append(nn.Linear(d, out_dim))
+
+    return nn.Sequential(*layers)
+
+class FiLMGate(nn.Module):
+    """
+    Context-conditioned FiLM + gating.
+    Given a context vector 'ctx', produce (gamma, beta) and a gate to modulate features.
+    """
+
+    def __init__(self, ctx_dim: int, feat_dim: int) -> None:
+        super().__init__()
+        self.to_gamma_beta = _make_mlp(ctx_dim, [256], 2 * feat_dim, dropout=0.1)
+        self.to_gate = _make_mlp(ctx_dim, [256], feat_dim, dropout=0.1)
+
+    def forward(self, feat: torch.Tensor, ctx: torch.Tensor) -> torch.Tensor:
+        gb = self.to_gamma_beta(ctx)
+        gamma, beta = torch.chunk(gb, 2, dim=-1)
+        gate = torch.sigmoid(self.to_gate(ctx))
+
+        out = (1.0 + gamma) * feat + beta
+        out = gate * out
+        return out
 
 class GazeModel(nn.Module):
     """
@@ -178,3 +215,93 @@ class GazeModel(nn.Module):
         x = self.fc(x)
 
         return x
+
+class EyeTheiaUFModel(nn.Module):
+    """
+    EyeTheia-UF (Uncertainty-aware Fusion)
+
+    - Keeps the same inputs as GazeModel: face, left eye, right eye, face grid
+    - Uses face-grid embedding as context to modulate eye and face features (FiLM + gating)
+    - Outputs (xy, logvar) for heteroscedastic regression
+    """
+
+    def __init__(self, gridSize: int = 25) -> None:
+        super().__init__()
+
+        # Reuse baseline submodules
+        self.eyeModel = FeatureImageModel()
+        self.faceModel = FaceImageModel()
+        self.gridModel = FaceGridModel(gridSize=gridSize)
+
+        # Same eyes join as baseline
+        self.eyesFC = nn.Sequential(
+            nn.Linear(2 * 12 * 12 * 64, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        # UF: context-driven modulation
+        ctx_dim = 128  # FaceGridModel output
+        self.film_eyes = FiLMGate(ctx_dim=ctx_dim, feat_dim=128)
+        self.film_face = FiLMGate(ctx_dim=ctx_dim, feat_dim=64)
+
+        # Fusion trunk -> latent embedding
+        self.fusion = nn.Sequential(
+            nn.Linear(128 + 64 + 128, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.2),
+            nn.Linear(256, 128),
+            nn.ReLU(inplace=True),
+        )
+
+        # Heads: mean + log-variance
+        self.head_xy = nn.Linear(128, 2)
+        self.head_logvar = nn.Linear(128, 2)  # log(sigma^2)
+
+    def forward(
+        self,
+        faces: torch.Tensor,
+        eyesLeft: torch.Tensor,
+        eyesRight: torch.Tensor,
+        faceGrids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Eyes
+        xEyeL = self.eyeModel(eyesLeft)
+        xEyeR = self.eyeModel(eyesRight)
+        xEyes = torch.cat((xEyeL, xEyeR), dim=1)
+        xEyes = self.eyesFC(xEyes)  # (B,128)
+
+        # Face + Grid
+        xFace = self.faceModel(faces)      # (B,64)
+        xGrid = self.gridModel(faceGrids)  # (B,128) -> context
+
+        # UF modulation
+        xEyes = self.film_eyes(xEyes, xGrid)
+        xFace = self.film_face(xFace, xGrid)
+
+        # Fusion
+        z = torch.cat((xEyes, xFace, xGrid), dim=1)
+        z = self.fusion(z)  # (B,128)
+
+        # Heads
+        xy = self.head_xy(z)
+        logvar = self.head_logvar(z).clamp(-8.0, 4.0)
+
+        return xy, logvar
+    
+def heteroscedastic_gaussian_loss(
+    xy_pred: torch.Tensor,
+    logvar: torch.Tensor,
+    xy_true: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Heteroscedastic Gaussian NLL loss (diagonal covariance).
+
+    logvar = log(sigma^2)
+    L = exp(-logvar) * (err^2) + logvar
+    """
+    err2 = (xy_true - xy_pred) ** 2
+    loss = torch.exp(-logvar) * err2 + logvar
+    return loss.mean()
+
+
+EyetheiaV1 = GazeModel
