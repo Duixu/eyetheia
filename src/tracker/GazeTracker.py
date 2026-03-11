@@ -6,7 +6,7 @@
 =========================
 
 This module handles gaze tracking using a deep learning model. It processes video input,
-extracts facial landmarks, and predicts gaze direction. The module also logs gaze data 
+extracts facial landmarks, and predicts gaze direction. The module also logs gaze data
 for further analysis.
 
 :author: Pather Stevenson
@@ -20,8 +20,9 @@ import torch.nn as nn
 import torch.optim
 import torch.utils.data
 from torch.utils.data import Dataset, DataLoader
-
 import mediapipe as mp
+import time
+import threading
 
 from utils.utils import *
 from utils.config import MID_X, MID_Y, LR, EPOCH, BATCH_SIZE
@@ -32,7 +33,6 @@ from .GazeModel import GazeModel
 from .Calibration import Calibration
 
 from OneEuroFilter import OneEuroFilter
-import time
 
 
 class GazeTracker:
@@ -60,16 +60,17 @@ class GazeTracker:
         self.calibration = Calibration(self)
         self.window_name = "EyeTheia Live Gaze Visualization"
 
+        self.gaze_filtered: bool = True
         self.gaze_filter_x = OneEuroFilter(
-            freq=10,
-            mincutoff=0.7,
-            beta=0.007,
-            dcutoff=1.
+            freq=30,
+            mincutoff=1.5,
+            beta=0.02,
+            dcutoff=1.0
         )
         self.gaze_filter_y = OneEuroFilter(
-            freq=10,
-            mincutoff=0.7,
-            beta=0.007,
+            freq=30,
+            mincutoff=1.5,
+            beta=0.02,
             dcutoff=1.0
         )
 
@@ -86,9 +87,13 @@ class GazeTracker:
         if verbose:
             match self.device:
                 case "cuda":
-                    print(f"\n-----------------\nDevice : {torch.cuda.get_device_name(torch.cuda.current_device())}\n-----------------\n")
+                    print(
+                        f"\n-----------------\n"
+                        f"Device : {torch.cuda.get_device_name(torch.cuda.current_device())}\n"
+                        f"-----------------\n"
+                    )
                 case "cpu":
-                    print(f"\n-----------------\nDevice : CPU\n-----------------\n")
+                    print("\n-----------------\nDevice : CPU\n-----------------\n")
                 case _:
                     pass
 
@@ -138,7 +143,7 @@ class GazeTracker:
 
     def train(self, dataset: Dataset, epochs: int = 10, learning_rate: float = 1e-4, batch_size: int = 4) -> None:
         """
-        Fine-tune the gaze tracking model with a calibration session
+        Fine-tune the gaze tracking model with a calibration session.
 
         :param dataset: A PyTorch Dataset containing new user-specific training samples.
         :param epochs: Number of epochs for fine-tuning.
@@ -156,7 +161,6 @@ class GazeTracker:
         for epoch in range(epochs):
             total_loss = 0
             for faces, eyes_left, eyes_right, face_grids, gaze_targets in dataloader:
-
                 faces, eyes_left, eyes_right, face_grids, gaze_targets = (
                     faces.to(self.device),
                     eyes_left.to(self.device),
@@ -168,18 +172,32 @@ class GazeTracker:
                 optimizer.zero_grad()
 
                 predictions = self.model(faces, eyes_left, eyes_right, face_grids)
-
                 loss = criterion(predictions, gaze_targets)
 
                 loss.backward()
-                optimizer.step() 
+                optimizer.step()
                 total_loss += loss.item()
 
             print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
 
         print("Fine-tuning complete.")
 
-    def extract_features(self, img: torch.Tensor, face_landmarks, SCREEN_WIDTH:int , SCREEN_HEIGHT: int) -> tuple:
+    def _show_loading_until_done(self, done_event: threading.Event, window_name: str | None = None) -> None:
+        if window_name is None:
+            window_name = self.window_name
+
+        angle = 0.0
+
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+        while not done_event.is_set():
+            frame = self._draw_loading_frame(angle)
+            cv2.imshow(window_name, frame)
+            cv2.waitKey(1)
+            angle = (angle + 18) % 360
+
+    def extract_features(self, img: torch.Tensor, face_landmarks, SCREEN_WIDTH: int, SCREEN_HEIGHT: int) -> tuple:
         """
         Extracts facial features from the image using detected landmarks.
 
@@ -217,21 +235,50 @@ class GazeTracker:
                 left_eye_input = torch.tensor(left_eye_roi, dtype=torch.float32).sub(self.eyeLeftMean).permute(0, 3, 1, 2).to(self.device)
                 right_eye_input = torch.tensor(right_eye_roi, dtype=torch.float32).sub(self.eyeRightMean).permute(0, 3, 1, 2).to(self.device)
                 face_input = torch.tensor(face_roi, dtype=torch.float32).sub(self.faceMean).permute(0, 3, 1, 2).to(self.device)
-            
+
             case _:
-                pass
-      
+                raise ValueError("Invalid model_path")
+
         face_grid = generate_face_grid(face_bbox, img.shape)
         face_grid_input = torch.tensor(face_grid, dtype=torch.float32).view(1, -1).to(self.device)
 
         return face_input, left_eye_input, right_eye_input, face_grid_input
 
+    def filter_gaze_pixels(self, gaze_x_px: float, gaze_y_px: float, timestamp: float) -> tuple[float, float]:
+        """
+        Apply One Euro filtering in pixel space.
+
+        :param gaze_x_px: X gaze coordinate in pixels
+        :param gaze_y_px: Y gaze coordinate in pixels
+        :param timestamp: Timestamp in seconds
+        :return: Filtered gaze coordinates in pixels
+        """
+        filtered_x = float(self.gaze_filter_x.filter(float(gaze_x_px), timestamp))
+        filtered_y = float(self.gaze_filter_y.filter(float(gaze_y_px), timestamp))
+        return filtered_x, filtered_y
+    
+    def reset_gaze_filters(self) -> None:
+        """
+        Reset One Euro filters to their default state.
+        Useful when calibration restarts or when filtering is toggled.
+        """
+        self.gaze_filter_x = OneEuroFilter(
+            freq=30,
+            mincutoff=1.5,
+            beta=0.02,
+            dcutoff=1.0
+        )
+        self.gaze_filter_y = OneEuroFilter(
+            freq=30,
+            mincutoff=1.5,
+            beta=0.02,
+            dcutoff=1.0
+        )
+    
     def predict_gaze(self, face_input: torch.Tensor, left_eye_input: torch.Tensor,
                            right_eye_input: torch.Tensor, face_grid_input: torch.Tensor,) -> tuple[float, float]:
         """
         Predicts the gaze direction based on the input features.
-        Converts the predicted gaze coordinates from centimeters to pixels
-        and logs the result.
 
         :param face_input: Processed face image tensor.
         :type face_input: torch.Tensor
@@ -241,10 +288,9 @@ class GazeTracker:
         :type right_eye_input: torch.Tensor
         :param face_grid_input: Face grid tensor representing spatial positioning.
         :type face_grid_input: torch.Tensor
-        :return: Tuple containing cm coordinates (x, y)
+        :return: Tuple containing gaze coordinates
         :rtype: tuple[float, float]
         """
-
         with torch.no_grad():
             gaze_prediction = self.model(
                 face_input, left_eye_input, right_eye_input, face_grid_input
@@ -254,6 +300,67 @@ class GazeTracker:
             self.logger.log_data(gaze_x, gaze_y)
 
             return gaze_x, gaze_y
+
+
+    def _draw_loading_frame(self, angle_deg: float) -> np.ndarray:
+        """
+        Draw a white fullscreen loading screen with a spinning indicator.
+
+        :param angle_deg: Current rotation angle of the spinner in degrees.
+        :type angle_deg: float
+        :return: Rendered loading frame.
+        :rtype: np.ndarray
+        """
+        frame = np.ones((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=np.uint8) * 255
+
+        cx, cy = MID_X, MID_Y
+        radius = 28
+        orbit = 42
+
+        theta = np.deg2rad(angle_deg)
+        dot_x = int(cx + orbit * np.cos(theta))
+        dot_y = int(cy + orbit * np.sin(theta))
+
+        cv2.putText(
+            frame,
+            "Calibration in progress...",
+            (MID_X - 220, MID_Y - 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (0, 0, 0),
+            2,
+            cv2.LINE_AA,
+        )
+
+        cv2.circle(frame, (cx, cy), radius, (0, 0, 0), 2)
+        cv2.circle(frame, (dot_x, dot_y), 8, (0, 0, 0), -1)
+
+        return frame
+
+
+    def _show_loading_screen(self, duration_sec: float = 0.1, window_name: str | None = None) -> None:
+        """
+        Display a temporary white loading screen with a spinner animation.
+
+        :param duration_sec: Duration in seconds.
+        :type duration_sec: float
+        :param window_name: Target OpenCV window name. Defaults to self.window_name.
+        :type window_name: str | None
+        """
+        if window_name is None:
+            window_name = self.window_name
+
+        start = time.perf_counter()
+        angle = 0.0
+
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+        while (time.perf_counter() - start) < duration_sec:
+            frame = self._draw_loading_frame(angle)
+            cv2.imshow(window_name, frame)
+            cv2.waitKey(1)
+            angle = (angle + 18) % 360
 
     def run(self, webcam: cv2.VideoCapture) -> None:
         """
@@ -266,22 +373,41 @@ class GazeTracker:
         calibration_dataset = self.calibration.run_calibration(webcam)
 
         print("\nFine-tuning the model with calibration data...")
-        self.train(calibration_dataset, epochs=EPOCH, learning_rate=LR, batch_size=BATCH_SIZE)
 
-        # start eval of the processed calibration
-        mean_error, std_error = self.calibration.evaluate_calibration_accuracy()
+        done_event = threading.Event()
+        result_holder = {}
 
-        # Setup fullscreen window for visualization
+        def worker():
+            try:
+                self.train(calibration_dataset, epochs=EPOCH, learning_rate=LR, batch_size=BATCH_SIZE)
+                mean_error, std_error = self.calibration.evaluate_calibration_accuracy()
+                result_holder["mean_error"] = mean_error
+                result_holder["std_error"] = std_error
+                result_holder["error"] = None
+            except Exception as e:
+                result_holder["error"] = e
+            finally:
+                done_event.set()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        self._show_loading_until_done(done_event)
+
+        if result_holder.get("error") is not None:
+            raise result_holder["error"]
+
+        mean_error = result_holder.get("mean_error", 0.0)
+        std_error = result_holder.get("std_error", 0.0)
+
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         fullscreen = True
 
-        # Default position in case we have no valid prediction yet
         gaze_x_px, gaze_y_px = MID_X, MID_Y
-        prev_x, prev_y = MID_X, MID_Y
 
+        self.reset_gaze_filters()
         tuner = OneEuroTuner(window_name="EyeTheia Controls")
-        smoothing_alpha = 0.2
 
         start_time = time.perf_counter()
 
@@ -292,8 +418,7 @@ class GazeTracker:
                     print("Error reading from the webcam.")
                     break
 
-                # --- Update OneEuro parameters live (trackbars) ---
-                smoothing_alpha, (freq, mincutoff, beta, dcutoff) = tuner.update_filters(
+                freq, mincutoff, beta, dcutoff = tuner.update_filters(
                     self.gaze_filter_x, self.gaze_filter_y
                 )
 
@@ -322,28 +447,21 @@ class GazeTracker:
                             case _:
                                 raise ValueError("invalid model_path")
 
-                        # --- One Euro Filter smoothing (timestamp in seconds) ---
                         timestamp = time.perf_counter() - start_time
-                        gx_px = float(self.gaze_filter_x.filter(float(gx_px), timestamp))
-                        gy_px = float(self.gaze_filter_y.filter(float(gy_px), timestamp))
 
-                        # Extra smoothing (EMA) on top of OneEuro output
-                        gaze_x_px = prev_x + smoothing_alpha * (gx_px - prev_x)
-                        gaze_y_px = prev_y + smoothing_alpha * (gy_px - prev_y)
+                        if self.gaze_filtered:
+                            gaze_x_px, gaze_y_px = self.filter_gaze_pixels(gx_px, gy_px, timestamp)
+                        else:
+                            gaze_x_px, gaze_y_px = gx_px, gy_px
 
-                        prev_x, prev_y = gaze_x_px, gaze_y_px
-
-                # White fullscreen background
                 white_bg = np.ones((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=np.uint8) * 255
 
-                # Draw solid black dot at filtered gaze position
                 cx, cy = int(gaze_x_px), int(gaze_y_px)
                 cv2.circle(white_bg, (cx, cy), 23, (0, 0, 0), 2)
 
-                # Show current OneEuro params + alpha
                 cv2.putText(
                     white_bg,
-                    f"OneEuroFilter: freq={freq}Hz  mincutoff={mincutoff:.2f}  beta={beta:.3f}  dcutoff={dcutoff:.2f}  alpha={smoothing_alpha:.2f}",
+                    f"OneEuroFilter: freq={freq}Hz  mincutoff={mincutoff:.2f}  beta={beta:.3f}  dcutoff={dcutoff:.2f}",
                     (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
@@ -352,7 +470,6 @@ class GazeTracker:
                     cv2.LINE_AA,
                 )
 
-                # (Optionnel) hint utilisateur
                 cv2.putText(
                     white_bg,
                     "Esc: toggle fullscreen  |  Q: quit",
