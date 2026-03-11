@@ -41,6 +41,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 import json
 import asyncio
 from typing import Optional, Tuple
+import time
 
 from routes.dependency import get_tracker, get_screen
 from utils.utils import FaceLandmarks, decode_image_bytes, denormalized_MPIIFaceGaze, gaze_cm_to_pixels
@@ -55,6 +56,7 @@ def _process_frame_sync(
     gaze_tracker,
     screen_width: int,
     screen_height: int,
+    start_time: float,
 ) -> Tuple[float, float]:
     """
     Synchronous heavy pipeline executed off the event loop (thread).
@@ -78,6 +80,10 @@ def _process_frame_sync(
     else:
         raise ValueError("Invalid model path")
 
+    if getattr(gaze_tracker, "gaze_filtered", True):
+        timestamp = time.perf_counter() - start_time
+        x_px, y_px = gaze_tracker.filter_gaze_pixels(x_px, y_px, timestamp)
+
     return float(x_px), float(y_px)
 
 
@@ -89,6 +95,7 @@ async def ws_predict_gaze(
 ):
     await ws.accept()
     screen_width, screen_height = screen
+    start_time = time.perf_counter()
 
     # Latest-only buffer for frames. If a new frame arrives while one is pending,
     # we overwrite the pending frame (real-time behavior).
@@ -157,6 +164,7 @@ async def ws_predict_gaze(
                     gaze_tracker,
                     screen_width,
                     screen_height,
+                    start_time,
                 )
 
                 await ws.send_text(json.dumps({
