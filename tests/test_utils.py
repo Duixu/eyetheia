@@ -106,6 +106,27 @@ EXPECTED_CALIBRATION_POINTS = {
     12: (int(TEST_SCREEN_WIDTH * 0.9), int(TEST_SCREEN_HEIGHT * 0.9)),
 }
 
+EXPECTED_9_CALIBRATION_POINTS = {
+    0: EXPECTED_CALIBRATION_POINTS[0],
+    1: EXPECTED_CALIBRATION_POINTS[2],
+    2: EXPECTED_CALIBRATION_POINTS[4],
+    3: EXPECTED_CALIBRATION_POINTS[5],
+    4: EXPECTED_CALIBRATION_POINTS[6],
+    5: EXPECTED_CALIBRATION_POINTS[7],
+    6: EXPECTED_CALIBRATION_POINTS[8],
+    7: EXPECTED_CALIBRATION_POINTS[10],
+    8: EXPECTED_CALIBRATION_POINTS[12],
+}
+
+EXPECTED_6_CALIBRATION_POINTS = {
+    0: EXPECTED_CALIBRATION_POINTS[0],
+    1: EXPECTED_CALIBRATION_POINTS[2],
+    2: EXPECTED_CALIBRATION_POINTS[4],
+    3: EXPECTED_CALIBRATION_POINTS[8],
+    4: EXPECTED_CALIBRATION_POINTS[10],
+    5: EXPECTED_CALIBRATION_POINTS[12],
+}
+
 def test_get_numbered_calibration_points():
     # Mock screen dimensions
     global SCREEN_WIDTH, SCREEN_HEIGHT, MID_X, MID_Y
@@ -127,3 +148,22 @@ def test_get_numbered_calibration_points():
     for key, expected_value in EXPECTED_CALIBRATION_POINTS.items():
         assert key in calibration_points, f"Missing key {key} in calibration points"
         assert calibration_points[key] == expected_value, f"Point {key} is incorrect: expected {expected_value}, got {calibration_points[key]}"
+
+
+@pytest.mark.parametrize(
+    "point_count, expected_points",
+    [
+        (9, EXPECTED_9_CALIBRATION_POINTS),
+        (6, EXPECTED_6_CALIBRATION_POINTS),
+    ],
+)
+def test_get_numbered_calibration_points_selected_counts(point_count, expected_points):
+    calibration_points = get_numbered_calibration_points(point_count)
+
+    assert len(calibration_points) == point_count
+    assert calibration_points == expected_points
+
+
+def test_get_numbered_calibration_points_invalid_count():
+    with pytest.raises(ValueError):
+        get_numbered_calibration_points(5)

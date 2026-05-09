@@ -24,7 +24,7 @@ from utils.utils import (
     get_numbered_calibration_points,
     euclidan_distance_radius,
 )
-from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT, CALIBRATION_PTS
+from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT
 from tracker.CalibrationDataset import CalibrationDataset
 
 
@@ -34,14 +34,17 @@ class Calibration:
     Uses mouse clicks to capture real gaze targets and extract corresponding features.
     """
 
-    def __init__(self, gaze_tracker: "GazeTracker") -> None:
+    def __init__(self, gaze_tracker: "GazeTracker", calibration_point_count: int = 13) -> None:
         """
         Initializes the Calibration object.
 
         :param gaze_tracker: Instance of GazeTracker to extract gaze features.
         :type gaze_tracker: GazeTracker
+        :param calibration_point_count: Number of calibration points to collect.
+        :type calibration_point_count: int
         """
         self.gaze_tracker = gaze_tracker
+        self.calibration_point_count = calibration_point_count
         self.capture_points: list[
             tuple[
                 tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
@@ -52,13 +55,25 @@ class Calibration:
         self.current_target: tuple[int, int] | None = None
         self.window_name: str = "Calibration Window"
         self.calibration_done: bool = False
-        self.calibration_points = get_numbered_calibration_points()
+        self.calibration_points = get_numbered_calibration_points(self.calibration_point_count)
         self.current_index = 0
 
         self.base_dim = min(SCREEN_WIDTH, SCREEN_HEIGHT)
 
         self.point_radius: int = max(8, int(self.base_dim * 0.006))
         self.click_radius: int = max(10, int(self.base_dim * 0.012))
+
+    def set_calibration_point_count(self, point_count: int) -> None:
+        """
+        Updates the active calibration point layout.
+
+        :param point_count: Number of calibration points. Supported values are 13, 9, and 6.
+        :type point_count: int
+        """
+        self.calibration_point_count = point_count
+        self.calibration_points = get_numbered_calibration_points(point_count)
+        self.current_index = 0
+        self.calibration_done = False
 
     def _mouse_callback(self, event: int, x: int, y: int, flags: int, param: any) -> None:
         """
@@ -247,7 +262,7 @@ class Calibration:
 
                             self.current_target = None
 
-                if len(self.capture_points) >= CALIBRATION_PTS:
+                if len(self.capture_points) >= len(self.calibration_points):
                     self.calibration_done = True
 
         cv2.destroyWindow(self.window_name)

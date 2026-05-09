@@ -220,13 +220,15 @@ def euclidan_distance_radius(pt1: tuple[float, float], pt2: tuple[float, float],
     """
     return np.linalg.norm(np.array(pt1) - np.array(pt2)) <= radius
 
-def get_numbered_calibration_points() -> Dict[int, Tuple[int, int]]:
+def get_numbered_calibration_points(point_count: int = 13) -> Dict[int, Tuple[int, int]]:
     """
     Returns the numbered calibration points as a dictionary {index: (x, y)}.
     
+    :param point_count: Number of calibration points to return. Supported values are 13, 9, and 6.
+    :type point_count: int
     :return: Dictionary with keys as indices (0-12) and values as (x, y) tuples.
     """
-    return {
+    points_13 = {
         0:  (int(SCREEN_WIDTH * 0.1) , int(SCREEN_HEIGHT * 0.1)),
         1:  (int(SCREEN_WIDTH * 0.25) , int(SCREEN_HEIGHT * 0.25)),
         2:  (int(SCREEN_WIDTH * 0.5) , int(SCREEN_HEIGHT * 0.1)),
@@ -240,6 +242,20 @@ def get_numbered_calibration_points() -> Dict[int, Tuple[int, int]]:
         10: (int(SCREEN_WIDTH * 0.5) , int(SCREEN_HEIGHT * 0.9)),
         11: (int(SCREEN_WIDTH * 0.75) , int(SCREEN_HEIGHT * 0.75)),
         12: (int(SCREEN_WIDTH * 0.9) , int(SCREEN_HEIGHT * 0.9)),
+    }
+
+    layouts = {
+        13: list(range(13)),
+        9: [0, 2, 4, 5, 6, 7, 8, 10, 12],
+        6: [0, 2, 4, 8, 10, 12],
+    }
+
+    if point_count not in layouts:
+        raise ValueError("point_count must be one of: 13, 9, 6")
+
+    return {
+        new_index: points_13[point_index]
+        for new_index, point_index in enumerate(layouts[point_count])
     }
 
 def normalize_MPIIFaceGaze(x_pixel: float, y_pixel: float, screen_width: int, screen_height: int) -> tuple[float, float]:

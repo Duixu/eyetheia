@@ -41,12 +41,14 @@ class GazeTracker:
     Manages model initialization and gaze prediction.
     """
 
-    def __init__(self, model_path: str = None):
+    def __init__(self, model_path: str = None, calibration_point_count: int = 13):
         """
         Initializes the gaze tracking system, loads the model, and prepares mean normalization values.
 
         :param model_path: Path to the pre-trained model checkpoint, defaults to None.
         :type model_path: str, optional
+        :param calibration_point_count: Number of calibration points to collect.
+        :type calibration_point_count: int
         """
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.mp = model_path
@@ -57,7 +59,7 @@ class GazeTracker:
         self._load_model(self.model_path)
         self.logger = GazeDataLogger()
         self.margin: int = 20
-        self.calibration = Calibration(self)
+        self.calibration = Calibration(self, calibration_point_count=calibration_point_count)
         self.window_name = "EyeTheia Live Gaze Visualization"
 
         self.gaze_filtered: bool = True
