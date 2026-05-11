@@ -16,44 +16,60 @@ This module initializes the webcam, loads the gaze tracking model, and starts th
 import cv2
 import numpy as np
 import os
-from tracker.GazeTracker import GazeTracker
+from typing import Sequence, TypeVar
+
 from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT
 
 
-def select_calibration_point_count() -> int | None:
-    """
-    Shows a blocking OpenCV selection screen before the normal tracking flow starts.
+MODEL_EYETHEIA_BASELINE = "eyetheia_baseline"
+COMPANY_SWIN_MODEL_ID = "company_swin"
+T = TypeVar("T")
 
-    :return: Selected calibration point count, or None if the user quits.
-    :rtype: int | None
-    """
-    window_name = "EyeTheia Calibration Setup"
-    options = [13, 9, 6]
-    selected_point_count = {"value": None}
 
-    frame_width = min(900, SCREEN_WIDTH)
+def _key_to_option(key: int, options: Sequence[T]) -> T | None:
+    if ord("1") <= key <= ord("9"):
+        index = key - ord("1")
+        if index < len(options):
+            return options[index]
+    return None
+
+
+def select_startup_option(
+    window_name: str,
+    title: str,
+    options: Sequence[tuple[T, str]],
+) -> T | None:
+    """
+    Shows a blocking OpenCV option selection screen.
+
+    :return: Selected option value, or None if the user quits.
+    """
+    selected = {"value": None}
+    option_values = [value for value, _ in options]
+
+    frame_width = min(980, SCREEN_WIDTH)
     frame_height = min(520, SCREEN_HEIGHT)
-    button_width = 180
+    button_width = 240 if len(options) <= 2 else 180
     button_height = 90
-    gap = 45
+    gap = 45 if len(options) <= 3 else 25
     start_x = (frame_width - (button_width * len(options) + gap * (len(options) - 1))) // 2
     button_y = 235
 
     buttons = []
-    for index, point_count in enumerate(options):
+    for index, (value, label) in enumerate(options):
         x1 = start_x + index * (button_width + gap)
         y1 = button_y
         x2 = x1 + button_width
         y2 = y1 + button_height
-        buttons.append((point_count, (x1, y1, x2, y2)))
+        buttons.append((value, label, (x1, y1, x2, y2)))
 
     def mouse_callback(event: int, x: int, y: int, flags: int, param: object) -> None:
         if event != cv2.EVENT_LBUTTONDOWN:
             return
 
-        for point_count, (x1, y1, x2, y2) in buttons:
+        for value, _, (x1, y1, x2, y2) in buttons:
             if x1 <= x <= x2 and y1 <= y <= y2:
-                selected_point_count["value"] = point_count
+                selected["value"] = value
                 break
 
     def render_frame() -> np.ndarray:
@@ -61,7 +77,7 @@ def select_calibration_point_count() -> int | None:
 
         cv2.putText(
             frame,
-            "Select calibration point count",
+            title,
             (80, 105),
             cv2.FONT_HERSHEY_SIMPLEX,
             1.0,
@@ -71,7 +87,7 @@ def select_calibration_point_count() -> int | None:
         )
         cv2.putText(
             frame,
-            "Click an option, or press 1 / 2 / 3. Press Q to quit.",
+            "Click an option, or press the matching number key. Press Q to quit.",
             (80, 155),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.65,
@@ -80,16 +96,19 @@ def select_calibration_point_count() -> int | None:
             cv2.LINE_AA,
         )
 
-        for index, (point_count, (x1, y1, x2, y2)) in enumerate(buttons, start=1):
+        for index, (_, label, (x1, y1, x2, y2)) in enumerate(buttons, start=1):
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 2)
+            text_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
+            text_x = x1 + max(12, (button_width - text_size[0]) // 2)
+            text_y = y1 + 55
             cv2.putText(
                 frame,
-                f"{point_count}",
-                (x1 + 58, y1 + 58),
+                label,
+                (text_x, text_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                1.4,
+                0.75,
                 (0, 0, 0),
-                3,
+                2,
                 cv2.LINE_AA,
             )
             cv2.putText(
@@ -108,22 +127,42 @@ def select_calibration_point_count() -> int | None:
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(window_name, mouse_callback)
 
-    while selected_point_count["value"] is None:
+    while selected["value"] is None:
         cv2.imshow(window_name, render_frame())
         key = cv2.waitKey(30) & 0xFF
 
-        if key == ord("1"):
-            selected_point_count["value"] = 13
-        elif key == ord("2"):
-            selected_point_count["value"] = 9
-        elif key == ord("3"):
-            selected_point_count["value"] = 6
+        key_selection = _key_to_option(key, option_values)
+        if key_selection is not None:
+            selected["value"] = key_selection
         elif key == ord("q"):
             cv2.destroyWindow(window_name)
             return None
 
     cv2.destroyWindow(window_name)
-    return selected_point_count["value"]
+    return selected["value"]
+
+
+def select_model() -> str | None:
+    return select_startup_option(
+        window_name="EyeTheia Model Setup",
+        title="Select gaze model",
+        options=[
+            (MODEL_EYETHEIA_BASELINE, "EyeTheia baseline"),
+            (COMPANY_SWIN_MODEL_ID, "Company Swin"),
+        ],
+    )
+
+
+def select_calibration_point_count() -> int | None:
+    return select_startup_option(
+        window_name="EyeTheia Calibration Setup",
+        title="Select calibration point count",
+        options=[
+            (13, "13"),
+            (9, "9"),
+            (6, "6"),
+        ],
+    )
 
 def main() -> None:
     """
@@ -133,11 +172,17 @@ def main() -> None:
     - Initializes the webcam (local or network stream).
     - Starts the gaze tracking process.
     """
+    selected_model = select_model()
+    if selected_model is None:
+        print("Model setup cancelled.")
+        return
+
     calibration_point_count = select_calibration_point_count()
     if calibration_point_count is None:
         print("Calibration setup cancelled.")
         return
 
+    print(f"Selected model: {selected_model}.")
     print(f"Selected {calibration_point_count} calibration points.")
 
     # Retrieve the webcam URL from environment variables
@@ -150,10 +195,22 @@ def main() -> None:
         print("Unable to open webcam. Please check your device or URL.")
         return
 
-    gaze_tracker = GazeTracker(
-        model_path="itracker_baseline.tar",
-        calibration_point_count=calibration_point_count,
-    )
+    if selected_model == MODEL_EYETHEIA_BASELINE:
+        from tracker.GazeTracker import GazeTracker
+
+        gaze_tracker = GazeTracker(
+            model_path="itracker_baseline.tar",
+            calibration_point_count=calibration_point_count,
+        )
+    elif selected_model == COMPANY_SWIN_MODEL_ID:
+        from company_gaze import CompanyGazeTracker
+
+        gaze_tracker = CompanyGazeTracker(
+            calibration_point_count=calibration_point_count,
+            calibration_mode="mapper",
+        )
+    else:
+        raise ValueError(f"Unknown gaze model: {selected_model}")
 
     try:
         gaze_tracker.run(webcam)

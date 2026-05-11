@@ -99,7 +99,6 @@ class GazeEstimator:
             # 4. 归一化
             norm_result = self.normalizer.normalize(image, center, rot)
             normalized_image = norm_result['normalized_image']
-            cv2.imwrite("images/normalized_image_up.jpg", normalized_image)
             normalizing_rot = norm_result['normalizing_rotation']
             
             # 5. 视线模型推理

@@ -1,4 +1,24 @@
-from .utils import FaceLandmarks, preprocess_roi, gaze_cm_to_pixels, pixels_to_gaze_cm, denormalized_MPIIFaceGaze, normalize_MPIIFaceGaze, decode_image_bytes
-from .OneEuroTuner import OneEuroTuner
-from .ws_codec import unpack_ws_message
 from .company_gaze_mapper import CompanyGazeMapper, CompanyGazeSample
+
+try:
+    from .utils import (
+        FaceLandmarks,
+        decode_image_bytes,
+        denormalized_MPIIFaceGaze,
+        gaze_cm_to_pixels,
+        normalize_MPIIFaceGaze,
+        pixels_to_gaze_cm,
+        preprocess_roi,
+    )
+except ModuleNotFoundError:
+    pass
+
+try:
+    from .OneEuroTuner import OneEuroTuner
+except ModuleNotFoundError:
+    pass
+
+try:
+    from .ws_codec import unpack_ws_message
+except ModuleNotFoundError:
+    pass
