@@ -21,6 +21,7 @@ from typing import Sequence, TypeVar
 from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT
 
 
+
 MODEL_EYETHEIA_BASELINE = "eyetheia_baseline"
 COMPANY_SWIN_MODEL_ID = "company_swin"
 T = TypeVar("T")
@@ -163,6 +164,19 @@ def select_calibration_point_count() -> int | None:
             (6, "6"),
         ],
     )
+# #新添加部分（输入分辨率）
+# def ask_screen_resolution():
+#     """
+#     让用户输入屏幕分辨率。
+#     如果用户直接回车，则默认使用 1920 x 1080。
+#     """
+#     screen_w = input("请输入屏幕宽度，例如 1920 或 2560，默认 1920：").strip()
+#     screen_h = input("请输入屏幕高度，例如 1080 或 1440，默认 1080：").strip()
+
+#     screen_w = int(screen_w) if screen_w else 1920
+#     screen_h = int(screen_h) if screen_h else 1080
+
+#     return screen_w, screen_h
 
 def main() -> None:
     """
