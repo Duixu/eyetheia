@@ -9,3 +9,6 @@ doc/
 dataset/
 artifacts/
 src/experiments/
+*.engine
+*.pt
+src/test.png
