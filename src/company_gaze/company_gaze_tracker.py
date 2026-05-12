@@ -16,6 +16,8 @@ from utils.config import BATCH_SIZE, EPOCH, LR, MID_X, MID_Y, SCREEN_HEIGHT, SCR
 COMPANY_SWIN_MODEL_ID = "company_swin"
 COMPANY_CALIBRATION_MAPPER = "mapper"
 COMPANY_CALIBRATION_ARC = "arc"
+COMPANY_CONFIRMATION_CLICK = "click"
+COMPANY_CONFIRMATION_DWELL = "dwell"
 DEFAULT_COMPANY_GAZE_WEIGHT_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "models", "Iter_19_swin_peg.pt")
 )
@@ -46,17 +48,25 @@ class CompanyGazeTracker:
         weight_path: str | None = None,
         calibration_mode: str = COMPANY_CALIBRATION_MAPPER,
         gaze_model_type: str = "swin",
+        calibration_confirmation: str = COMPANY_CONFIRMATION_CLICK,
         eyetheia_finetune_tracker: Any | None = None,
+        run_eyetheia_after_calibration: bool = False,
+        dwell_seconds: float = 1.2,
     ) -> None:
         if calibration_mode not in (COMPANY_CALIBRATION_MAPPER, COMPANY_CALIBRATION_ARC):
             raise ValueError('company calibration mode must be "mapper" or "arc"')
+        if calibration_confirmation not in (COMPANY_CONFIRMATION_CLICK, COMPANY_CONFIRMATION_DWELL):
+            raise ValueError('company calibration confirmation must be "click" or "dwell"')
         from utils.utils import get_numbered_calibration_points
 
         self.calibration_point_count = calibration_point_count
         self.calibration_points = get_numbered_calibration_points(calibration_point_count)
         self.weight_path = weight_path or DEFAULT_COMPANY_GAZE_WEIGHT_PATH
         self.calibration_mode = calibration_mode
+        self.calibration_confirmation = calibration_confirmation
         self.eyetheia_finetune_tracker = eyetheia_finetune_tracker
+        self.run_eyetheia_after_calibration = run_eyetheia_after_calibration
+        self.dwell_seconds = float(dwell_seconds)
 
         if not os.path.exists(self.weight_path):
             raise FileNotFoundError(f"Company gaze weight file not found: {self.weight_path}")
@@ -86,6 +96,12 @@ class CompanyGazeTracker:
 
     def run(self, webcam: cv2.VideoCapture) -> None:
         self.run_calibration(webcam)
+        if self.run_eyetheia_after_calibration:
+            if self.eyetheia_finetune_tracker is None:
+                raise RuntimeError("EyeTheia tracker is not configured.")
+            self.eyetheia_finetune_tracker.run_tracking_loop(webcam)
+            return
+
         if self.mapper is None or not self.mapper.fitted:
             raise RuntimeError("Company gaze mapper is not fitted; finish calibration first.")
 
@@ -183,13 +199,19 @@ class CompanyGazeTracker:
         self.calibration_done = False
         samples: list[tuple[float, float, float, float, tuple[float, float, float]]] = []
         eyetheia_samples = []
+        dwell_started_at = time.perf_counter()
 
         cv2.namedWindow(self.calibration_window_name, cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback(self.calibration_window_name, self._mouse_callback)
+        if self.calibration_confirmation == COMPANY_CONFIRMATION_CLICK:
+            cv2.setMouseCallback(self.calibration_window_name, self._mouse_callback)
 
         with mp.solutions.face_mesh.FaceMesh(refine_landmarks=True, max_num_faces=1) as face_mesh:
             while not self.calibration_done:
-                calibration_frame = self._render_calibration_frame()
+                if self.calibration_confirmation == COMPANY_CONFIRMATION_DWELL:
+                    self.current_target = self.calibration_points[self.current_index]
+
+                dwell_elapsed = time.perf_counter() - dwell_started_at
+                calibration_frame = self._render_calibration_frame(dwell_elapsed)
                 cv2.setWindowProperty(
                     self.calibration_window_name,
                     cv2.WND_PROP_FULLSCREEN,
@@ -204,11 +226,18 @@ class CompanyGazeTracker:
 
                 if self.current_target is None:
                     continue
+                if (
+                    self.calibration_confirmation == COMPANY_CONFIRMATION_DWELL
+                    and dwell_elapsed < self.dwell_seconds
+                ):
+                    continue
 
                 target_x, target_y = self.current_target
                 result, face_landmarks = self._estimate_company_gaze_with_landmarks(img, face_mesh)
                 if result is None:
                     print("No valid face landmarks for this calibration point; please keep looking at the target.")
+                    if self.calibration_confirmation == COMPANY_CONFIRMATION_DWELL:
+                        dwell_started_at = time.perf_counter()
                     continue
 
                 pitch = float(result["pitch"])
@@ -231,6 +260,7 @@ class CompanyGazeTracker:
 
                 self.current_target = None
                 self.current_index += 1
+                dwell_started_at = time.perf_counter()
                 if self.current_index >= len(self.calibration_points):
                     self.calibration_done = True
 
@@ -360,7 +390,7 @@ class CompanyGazeTracker:
         else:
             print(f"Incorrect click at ({x}, {y}). Please click on point {self.current_index + 1}.")
 
-    def _render_calibration_frame(self) -> np.ndarray:
+    def _render_calibration_frame(self, dwell_elapsed: float = 0.0) -> np.ndarray:
         frame = np.ones((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=np.uint8) * 255
         if not self.calibration_done and self.current_index < len(self.calibration_points):
             tx, ty = self.calibration_points[self.current_index]
@@ -375,9 +405,14 @@ class CompanyGazeTracker:
                 2,
                 cv2.LINE_AA,
             )
+            if self.calibration_confirmation == COMPANY_CONFIRMATION_DWELL:
+                remaining = max(0.0, self.dwell_seconds - dwell_elapsed)
+                instruction = f"Look at the black circle and hold still: {remaining:.1f}s"
+            else:
+                instruction = "Look at the black circle, then click inside it."
             cv2.putText(
                 frame,
-                "Look at the black circle, then click inside it.",
+                instruction,
                 (30, SCREEN_HEIGHT - 40),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,

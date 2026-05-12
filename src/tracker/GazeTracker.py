@@ -401,7 +401,15 @@ class GazeTracker:
 
         mean_error = result_holder.get("mean_error", 0.0)
         std_error = result_holder.get("std_error", 0.0)
+        self.run_tracking_loop(webcam)
 
+    def run_tracking_loop(self, webcam: cv2.VideoCapture) -> None:
+        """
+        Runs gaze tracking with the currently loaded/fine-tuned model.
+
+        This is used after either the original EyeTheia click calibration or an
+        external calibration flow that has already fine-tuned this tracker.
+        """
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         fullscreen = True

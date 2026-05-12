@@ -144,13 +144,24 @@ def select_startup_option(
     return selected["value"]
 
 
+def select_model() -> str | None:
+    return select_startup_option(
+        window_name="EyeTheia Model Setup",
+        title="Select gaze model",
+        options=[
+            (MODEL_EYETHEIA_BASELINE, "EyeTheia"),
+            (COMPANY_SWIN_MODEL_ID, "Company"),
+        ],
+    )
+
+
 def select_calibration_workflow() -> str | None:
     return select_startup_option(
         window_name="EyeTheia Calibration Mode",
         title="Select calibration mode",
         options=[
-            (CALIBRATION_ORIGINAL_CLICK, "Original click"),
-            (CALIBRATION_COMPANY_GAZE, "Company gaze"),
+            (CALIBRATION_ORIGINAL_CLICK, "EyeTheia click"),
+            (CALIBRATION_COMPANY_GAZE, "Company dwell"),
         ],
     )
 
@@ -174,6 +185,11 @@ def main() -> None:
     - Initializes the webcam (local or network stream).
     - Starts the gaze tracking process.
     """
+    selected_model = select_model()
+    if selected_model is None:
+        print("Model setup cancelled.")
+        return
+
     calibration_workflow = select_calibration_workflow()
     if calibration_workflow is None:
         print("Calibration mode setup cancelled.")
@@ -184,6 +200,7 @@ def main() -> None:
         print("Calibration setup cancelled.")
         return
 
+    print(f"Selected model: {selected_model}.")
     print(f"Selected calibration mode: {calibration_workflow}.")
     print(f"Selected {calibration_point_count} calibration points.")
 
@@ -197,14 +214,14 @@ def main() -> None:
         print("Unable to open webcam. Please check your device or URL.")
         return
 
-    if calibration_workflow == CALIBRATION_ORIGINAL_CLICK:
+    if selected_model == MODEL_EYETHEIA_BASELINE and calibration_workflow == CALIBRATION_ORIGINAL_CLICK:
         from tracker.GazeTracker import GazeTracker
 
         gaze_tracker = GazeTracker(
             model_path="itracker_baseline.tar",
             calibration_point_count=calibration_point_count,
         )
-    elif calibration_workflow == CALIBRATION_COMPANY_GAZE:
+    elif selected_model == MODEL_EYETHEIA_BASELINE and calibration_workflow == CALIBRATION_COMPANY_GAZE:
         from company_gaze import CompanyGazeTracker
         from tracker.GazeTracker import GazeTracker
 
@@ -214,11 +231,30 @@ def main() -> None:
         )
         gaze_tracker = CompanyGazeTracker(
             calibration_point_count=calibration_point_count,
-            calibration_mode="arc",
             eyetheia_finetune_tracker=eyetheia_finetune_tracker,
+            calibration_confirmation="dwell",
+            run_eyetheia_after_calibration=True,
+        )
+    elif selected_model == COMPANY_SWIN_MODEL_ID and calibration_workflow == CALIBRATION_ORIGINAL_CLICK:
+        from company_gaze import CompanyGazeTracker
+
+        gaze_tracker = CompanyGazeTracker(
+            calibration_point_count=calibration_point_count,
+            calibration_mode="arc",
+            calibration_confirmation="click",
+        )
+    elif selected_model == COMPANY_SWIN_MODEL_ID and calibration_workflow == CALIBRATION_COMPANY_GAZE:
+        from company_gaze import CompanyGazeTracker
+
+        gaze_tracker = CompanyGazeTracker(
+            calibration_point_count=calibration_point_count,
+            calibration_mode="arc",
+            calibration_confirmation="dwell",
         )
     else:
-        raise ValueError(f"Unknown calibration workflow: {calibration_workflow}")
+        raise ValueError(
+            f"Unknown model/calibration workflow: {selected_model}/{calibration_workflow}"
+        )
 
     try:
         gaze_tracker.run(webcam)
