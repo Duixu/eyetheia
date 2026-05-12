@@ -16,6 +16,7 @@ company_gaze_mapper = importlib.util.module_from_spec(spec)
 sys.modules["company_gaze_mapper"] = company_gaze_mapper
 spec.loader.exec_module(company_gaze_mapper)
 CompanyGazeMapper = company_gaze_mapper.CompanyGazeMapper
+CompanyArcGazeMapper = company_gaze_mapper.CompanyArcGazeMapper
 
 
 def _quadratic_target(pitch, yaw):
@@ -72,6 +73,53 @@ def test_company_gaze_mapper_save_and_load():
 def test_company_gaze_mapper_requires_enough_samples():
     mapper = CompanyGazeMapper(degree=2)
     mapper.add_sample(0, 0, 960, 540)
+
+    with pytest.raises(ValueError, match="requires at least 6 samples"):
+        mapper.fit()
+
+
+def _angles_from_attention_vector(vector):
+    pitch = np.arcsin(-vector[1])
+    yaw = np.arcsin(-vector[0] / np.cos(pitch))
+    return float(pitch), float(yaw)
+
+
+def test_company_arc_gaze_mapper_fits_company_screen_intersection_geometry():
+    face_center = np.array([0.0, 0.0, 0.5])
+    tvec = np.array([960.0, -540.0, 1000.0])
+    origin = face_center + tvec
+    targets = [
+        (200.0, 120.0),
+        (960.0, 120.0),
+        (1720.0, 120.0),
+        (200.0, 900.0),
+        (960.0, 900.0),
+        (1720.0, 900.0),
+    ]
+    samples = []
+    for x_px, y_px in targets:
+        target = np.array([x_px, -y_px, 0.0])
+        attention_vec = target - origin
+        attention_vec = attention_vec / np.linalg.norm(attention_vec)
+        pitch, yaw = _angles_from_attention_vector(attention_vec)
+        samples.append((pitch, yaw, x_px, y_px, face_center))
+
+    mapper = CompanyArcGazeMapper.fit_from_samples(
+        samples,
+        pitch_yaw_unit="rad",
+        screen_size=(1920, 1080),
+    )
+
+    assert mapper.mean_error_px() < 1e-3
+    assert mapper.predict(samples[0][0], samples[0][1], face_center) == pytest.approx(
+        targets[0],
+        abs=1e-3,
+    )
+
+
+def test_company_arc_gaze_mapper_requires_six_samples():
+    mapper = CompanyArcGazeMapper()
+    mapper.add_sample(0.0, 0.0, 960.0, 540.0)
 
     with pytest.raises(ValueError, match="requires at least 6 samples"):
         mapper.fit()

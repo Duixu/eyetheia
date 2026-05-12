@@ -9,7 +9,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from utils.company_gaze_mapper import CompanyGazeMapper
+from utils.company_gaze_mapper import CompanyArcGazeMapper
 from utils.config import MID_X, MID_Y, SCREEN_HEIGHT, SCREEN_WIDTH
 
 
@@ -49,12 +49,6 @@ class CompanyGazeTracker:
     ) -> None:
         if calibration_mode not in (COMPANY_CALIBRATION_MAPPER, COMPANY_CALIBRATION_ARC):
             raise ValueError('company calibration mode must be "mapper" or "arc"')
-        if calibration_mode == COMPANY_CALIBRATION_ARC:
-            raise NotImplementedError(
-                "Company ARC calibration is preserved in company_gaze.utils.arc_calibration, "
-                "but the local EyeTheia integration currently runs the mapper flow."
-            )
-
         from utils.utils import get_numbered_calibration_points
 
         self.calibration_point_count = calibration_point_count
@@ -74,7 +68,7 @@ class CompanyGazeTracker:
             device=str(self.device),
             weight_path=self.weight_path,
         )
-        self.mapper: CompanyGazeMapper | None = None
+        self.mapper: CompanyArcGazeMapper | None = None
         self.window_name = "EyeTheia Live Gaze Visualization"
         self.calibration_window_name = "Company Gaze Calibration"
         self.current_index = 0
@@ -180,12 +174,12 @@ class CompanyGazeTracker:
         cv2.destroyWindow(self.window_name)
         cv2.destroyWindow("EyeTheia Controls")
 
-    def run_calibration(self, webcam: cv2.VideoCapture) -> CompanyGazeMapper:
+    def run_calibration(self, webcam: cv2.VideoCapture) -> CompanyArcGazeMapper:
         print("\nCompany gaze calibration started")
         self.current_index = 0
         self.current_target = None
         self.calibration_done = False
-        samples: list[tuple[float, float, float, float]] = []
+        samples: list[tuple[float, float, float, float, tuple[float, float, float]]] = []
 
         cv2.namedWindow(self.calibration_window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(self.calibration_window_name, self._mouse_callback)
@@ -216,7 +210,8 @@ class CompanyGazeTracker:
 
                 pitch = float(result["pitch"])
                 yaw = float(result["yaw"])
-                samples.append((pitch, yaw, float(target_x), float(target_y)))
+                face_center = self._coerce_face_center(result.get("face_center"))
+                samples.append((pitch, yaw, float(target_x), float(target_y), face_center))
                 print(
                     f"Captured company gaze sample {len(samples)}/{len(self.calibration_points)}: "
                     f"pitch={pitch:.4f}, yaw={yaw:.4f}, target=({target_x}, {target_y})"
@@ -228,9 +223,8 @@ class CompanyGazeTracker:
                     self.calibration_done = True
 
         cv2.destroyWindow(self.calibration_window_name)
-        self.mapper = CompanyGazeMapper.fit_from_samples(
+        self.mapper = CompanyArcGazeMapper.fit_from_samples(
             samples,
-            degree=2,
             pitch_yaw_unit="rad",
             screen_size=(SCREEN_WIDTH, SCREEN_HEIGHT),
         )
@@ -254,7 +248,8 @@ class CompanyGazeTracker:
 
         pitch = float(result["pitch"])
         yaw = float(result["yaw"])
-        x_px, y_px = self.mapper.predict(pitch, yaw)
+        face_center = self._coerce_face_center(result.get("face_center"))
+        x_px, y_px = self.mapper.predict(pitch, yaw, face_center=face_center)
         return CompanyGazePrediction(
             x_px=x_px,
             y_px=y_px,
@@ -332,6 +327,15 @@ class CompanyGazeTracker:
     @staticmethod
     def _within_radius(pt1: tuple[float, float], pt2: tuple[float, float], radius: float) -> bool:
         return bool(np.linalg.norm(np.array(pt1) - np.array(pt2)) <= radius)
+
+    @staticmethod
+    def _coerce_face_center(value: Any) -> tuple[float, float, float]:
+        if value is None:
+            return (0.0, 0.0, 0.5)
+        center = np.asarray(value, dtype=np.float64).reshape(-1)
+        if center.size < 3:
+            return (0.0, 0.0, 0.5)
+        return (float(center[0]), float(center[1]), float(center[2]))
 
     @staticmethod
     def _new_filter():
