@@ -363,6 +363,75 @@ class GazeTracker:
             cv2.imshow(window_name, frame)
             cv2.waitKey(1)
             angle = (angle + 18) % 360
+    
+    #新增函数实现利用记录生成热力图
+    def _generate_heatmap_image(
+        self,
+        gaze_points,
+        screen_width: int = SCREEN_WIDTH,
+        screen_height: int = SCREEN_HEIGHT,
+        sigma: int = 35,
+    ):
+        """
+        根据本次 tracking 过程中记录的 gaze_points 生成热力图图像。
+        gaze_points 格式: [(x1, y1), (x2, y2), ...]
+        """
+        if gaze_points is None or len(gaze_points) == 0:
+            print("[WARNING] No gaze points collected. Cannot generate heatmap.")
+            return None
+
+        heatmap = np.zeros((screen_height, screen_width), dtype=np.float32)
+
+        valid_count = 0
+
+        for x, y in gaze_points:
+            x = int(x)
+            y = int(y)
+
+            if 0 <= x < screen_width and 0 <= y < screen_height:
+                heatmap[y, x] += 1
+                valid_count += 1
+
+        if valid_count == 0:
+            print("[WARNING] No valid gaze points in screen range.")
+            return None
+
+        heatmap = cv2.GaussianBlur(
+            heatmap,
+            (0, 0),
+            sigmaX=sigma,
+            sigmaY=sigma
+        )
+
+        heatmap_norm = cv2.normalize(
+            heatmap,
+            None,
+            0,
+            255,
+            cv2.NORM_MINMAX
+        ).astype(np.uint8)
+
+        heatmap_color = cv2.applyColorMap(
+            heatmap_norm,
+            cv2.COLORMAP_JET
+        )
+
+        background = np.ones(
+            (screen_height, screen_width, 3),
+            dtype=np.uint8
+        ) * 255
+
+        result = cv2.addWeighted(
+            background,
+            0.55,
+            heatmap_color,
+            0.45,
+            0
+        )
+
+        print(f"[INFO] Heatmap generated with {valid_count} valid gaze points.")
+
+        return result
 
     def run(self, webcam: cv2.VideoCapture) -> None:
         """
@@ -372,6 +441,7 @@ class GazeTracker:
         :param webcam: OpenCV VideoCapture object.
         :type webcam: cv2.VideoCapture
         """
+        #1.先标定
         calibration_dataset = self.calibration.run_calibration(webcam)
 
         print("\nFine-tuning the model with calibration data...")
@@ -415,6 +485,9 @@ class GazeTracker:
         fullscreen = True
 
         gaze_x_px, gaze_y_px = MID_X, MID_Y
+
+        # 新增用于记录标定完成后，用户自由观看屏幕期间的 gaze 点
+        gaze_points = []
 
         self.reset_gaze_filters()
         tuner = OneEuroTuner(window_name="EyeTheia Controls")
@@ -463,6 +536,10 @@ class GazeTracker:
                             gaze_x_px, gaze_y_px = self.filter_gaze_pixels(gx_px, gy_px, timestamp)
                         else:
                             gaze_x_px, gaze_y_px = gx_px, gy_px
+                        
+                        #新增：记录本次自由观看阶段的 gaze 点
+                        if 0 <= gaze_x_px < SCREEN_WIDTH and 0 <= gaze_y_px < SCREEN_HEIGHT:
+                            gaze_points.append((gaze_x_px, gaze_y_px))
 
                 white_bg = np.ones((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=np.uint8) * 255
 
@@ -506,4 +583,35 @@ class GazeTracker:
 
         cv2.destroyWindow(self.window_name)
         cv2.destroyWindow("EyeTheia Controls")
-        # self.logger.save_data()
+         # 新增：用户按 q 结束 tracking 后，直接生成并弹出热力图
+        heatmap_img = self._generate_heatmap_image(
+            gaze_points=gaze_points,
+            screen_width=SCREEN_WIDTH,
+            screen_height=SCREEN_HEIGHT,
+            sigma=35
+        )
+
+        if heatmap_img is not None:
+            output_path = os.path.abspath(
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "../experiments/gaze_heatmap.png"
+                )
+            )
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            cv2.imwrite(output_path, heatmap_img)
+
+            print(f"[INFO] Heatmap saved to: {output_path}")
+            print("[INFO] Showing heatmap. Press any key to close.")
+
+            cv2.namedWindow("Gaze Heatmap", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty(
+                "Gaze Heatmap",
+                cv2.WND_PROP_FULLSCREEN,
+                cv2.WINDOW_FULLSCREEN
+            )
+            cv2.imshow("Gaze Heatmap", heatmap_img)
+            cv2.waitKey(0)
+            cv2.destroyWindow("Gaze Heatmap")
+        #self.logger.save_data()

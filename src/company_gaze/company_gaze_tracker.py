@@ -93,6 +93,73 @@ class CompanyGazeTracker:
         base_dim = min(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.point_radius = max(8, int(base_dim * 0.006))
         self.click_radius = max(10, int(base_dim * 0.012))
+    #新增绘制热力图
+    def _generate_heatmap_image(
+        self,
+        gaze_points: list[tuple[float, float]],
+        screen_width: int = SCREEN_WIDTH,
+        screen_height: int = SCREEN_HEIGHT,
+        sigma: int = 35,
+    ) -> np.ndarray | None:
+        """
+        根据本次公司模型 tracking 过程中记录的 gaze_points 生成热力图。
+        gaze_points 格式: [(x1, y1), (x2, y2), ...]
+        """
+        if gaze_points is None or len(gaze_points) == 0:
+            print("[WARNING] No gaze points collected. Cannot generate heatmap.")
+            return None
+
+        heatmap = np.zeros((screen_height, screen_width), dtype=np.float32)
+
+        valid_count = 0
+
+        for x, y in gaze_points:
+            x = int(x)
+            y = int(y)
+
+            if 0 <= x < screen_width and 0 <= y < screen_height:
+                heatmap[y, x] += 1
+                valid_count += 1
+
+        if valid_count == 0:
+            print("[WARNING] No valid gaze points in screen range.")
+            return None
+
+        heatmap = cv2.GaussianBlur(
+            heatmap,
+            (0, 0),
+            sigmaX=sigma,
+            sigmaY=sigma
+        )
+
+        heatmap_norm = cv2.normalize(
+            heatmap,
+            None,
+            0,
+            255,
+            cv2.NORM_MINMAX
+        ).astype(np.uint8)
+
+        heatmap_color = cv2.applyColorMap(
+            heatmap_norm,
+            cv2.COLORMAP_JET
+        )
+
+        background = np.ones(
+            (screen_height, screen_width, 3),
+            dtype=np.uint8
+        ) * 255
+
+        result = cv2.addWeighted(
+            background,
+            0.55,
+            heatmap_color,
+            0.45,
+            0
+        )
+
+        print(f"[INFO] Company heatmap generated with {valid_count} valid gaze points.")
+        return result
 
     def run(self, webcam: cv2.VideoCapture) -> None:
         self.run_calibration(webcam)
@@ -112,6 +179,8 @@ class CompanyGazeTracker:
         gaze_x_px, gaze_y_px = float(MID_X), float(MID_Y)
         raw_pitch, raw_yaw, confidence = 0.0, 0.0, 0.0
         self.reset_gaze_filters()
+        # 新增：记录公司模型在自由观看阶段输出的屏幕 gaze 点
+        gaze_points: list[tuple[float, float]] = []
         from utils.OneEuroTuner import OneEuroTuner
 
         tuner = OneEuroTuner(window_name="EyeTheia Controls")
@@ -142,6 +211,9 @@ class CompanyGazeTracker:
                         )
                     else:
                         gaze_x_px, gaze_y_px = prediction.x_px, prediction.y_px
+                    # 新增：保存有效 gaze 点，用于退出后生成热力图
+                    if 0 <= gaze_x_px < SCREEN_WIDTH and 0 <= gaze_y_px < SCREEN_HEIGHT:
+                        gaze_points.append((gaze_x_px, gaze_y_px))
 
                 frame = np.ones((SCREEN_HEIGHT, SCREEN_WIDTH, 3), dtype=np.uint8) * 255
                 cv2.circle(frame, (int(gaze_x_px), int(gaze_y_px)), 23, (0, 0, 0), 2)
@@ -191,6 +263,43 @@ class CompanyGazeTracker:
 
         cv2.destroyWindow(self.window_name)
         cv2.destroyWindow("EyeTheia Controls")
+        
+        print(f"[INFO] Company collected gaze points: {len(gaze_points)}")
+
+        heatmap_img = self._generate_heatmap_image(
+            gaze_points=gaze_points,
+            screen_width=SCREEN_WIDTH,
+            screen_height=SCREEN_HEIGHT,
+            sigma=35,
+        )
+
+        if heatmap_img is not None:
+            output_path = os.path.abspath(
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "figures",
+                    "company_gaze_heatmap.png"
+                )
+            )
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            cv2.imwrite(output_path, heatmap_img)
+
+            print(f"[INFO] Company heatmap saved to: {output_path}")
+            print("[INFO] Showing company gaze heatmap. Press any key to close.")
+
+            cv2.namedWindow("Company Gaze Heatmap", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty(
+                "Company Gaze Heatmap",
+                cv2.WND_PROP_FULLSCREEN,
+                cv2.WINDOW_FULLSCREEN
+            )
+            cv2.imshow("Company Gaze Heatmap", heatmap_img)
+            cv2.waitKey(0)
+            cv2.destroyWindow("Company Gaze Heatmap")
+        else:
+            print("[WARNING] Company heatmap not generated because no valid gaze points were collected.")
 
     def run_calibration(self, webcam: cv2.VideoCapture) -> CompanyArcGazeMapper:
         print("\nCompany gaze calibration started")

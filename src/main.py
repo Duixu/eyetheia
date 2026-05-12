@@ -21,6 +21,7 @@ from typing import Sequence, TypeVar
 from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT
 
 
+
 CALIBRATION_ORIGINAL_CLICK = "original_click"
 CALIBRATION_COMPANY_GAZE = "company_gaze"
 MODEL_EYETHEIA_BASELINE = "eyetheia_baseline"
