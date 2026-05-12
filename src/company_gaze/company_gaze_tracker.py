@@ -51,7 +51,7 @@ class CompanyGazeTracker:
         calibration_confirmation: str = COMPANY_CONFIRMATION_CLICK,
         eyetheia_finetune_tracker: Any | None = None,
         run_eyetheia_after_calibration: bool = False,
-        dwell_seconds: float = 1.2,
+        dwell_seconds: float = 3,
     ) -> None:
         if calibration_mode not in (COMPANY_CALIBRATION_MAPPER, COMPANY_CALIBRATION_ARC):
             raise ValueError('company calibration mode must be "mapper" or "arc"')
