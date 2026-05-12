@@ -19,8 +19,6 @@ sys.modules.setdefault(
 )
 
 from company_gaze.company_gaze_tracker import CompanyGazeTracker
-from utils.company_gaze_mapper import CompanyGazeMapper
-
 
 class FakeEstimator:
     def is_landmarks_valid(self, landmarks):
@@ -30,8 +28,20 @@ class FakeEstimator:
         return {
             "pitch": 0.1,
             "yaw": -0.2,
+            "face_center": np.array([0.0, 0.0, 0.5]),
             "confidence": 0.75,
         }
+
+
+class FakeMapper:
+    fitted = True
+
+    def __init__(self):
+        self.last_args = None
+
+    def predict(self, pitch, yaw, face_center=None):
+        self.last_args = (pitch, yaw, face_center)
+        return 123.0, 456.0
 
 
 class FakeFaceMesh:
@@ -48,22 +58,8 @@ class FakeFaceMesh:
 
 
 def test_company_gaze_tracker_predict_frame_maps_pitch_yaw_to_screen_pixels():
-    mapper = CompanyGazeMapper.fit_from_samples(
-        [
-            (-0.2, -0.2, 100, 100),
-            (-0.2, 0.2, 100, 900),
-            (0.2, -0.2, 1800, 100),
-            (0.2, 0.2, 1800, 900),
-            (0.0, 0.0, 960, 540),
-            (0.1, -0.2, 1200, 300),
-        ],
-        degree=2,
-        pitch_yaw_unit="rad",
-        ridge=0.0,
-        screen_size=(1920, 1080),
-    )
-
     tracker = object.__new__(CompanyGazeTracker)
+    mapper = FakeMapper()
     tracker.mapper = mapper
     tracker.estimator = FakeEstimator()
 
@@ -76,5 +72,6 @@ def test_company_gaze_tracker_predict_frame_maps_pitch_yaw_to_screen_pixels():
     assert prediction.raw_pitch == 0.1
     assert prediction.raw_yaw == -0.2
     assert prediction.confidence == 0.75
-    assert prediction.x_px == mapper.predict(0.1, -0.2)[0]
-    assert prediction.y_px == mapper.predict(0.1, -0.2)[1]
+    assert prediction.x_px == 123.0
+    assert prediction.y_px == 456.0
+    assert mapper.last_args == (0.1, -0.2, (0.0, 0.0, 0.5))

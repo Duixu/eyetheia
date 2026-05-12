@@ -22,6 +22,8 @@ from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT
 
 
 
+CALIBRATION_ORIGINAL_CLICK = "original_click"
+CALIBRATION_COMPANY_GAZE = "company_gaze"
 MODEL_EYETHEIA_BASELINE = "eyetheia_baseline"
 COMPANY_SWIN_MODEL_ID = "company_swin"
 T = TypeVar("T")
@@ -148,8 +150,19 @@ def select_model() -> str | None:
         window_name="EyeTheia Model Setup",
         title="Select gaze model",
         options=[
-            (MODEL_EYETHEIA_BASELINE, "EyeTheia baseline"),
-            (COMPANY_SWIN_MODEL_ID, "Company Swin"),
+            (MODEL_EYETHEIA_BASELINE, "EyeTheia"),
+            (COMPANY_SWIN_MODEL_ID, "Company"),
+        ],
+    )
+
+
+def select_calibration_workflow() -> str | None:
+    return select_startup_option(
+        window_name="EyeTheia Calibration Mode",
+        title="Select calibration mode",
+        options=[
+            (CALIBRATION_ORIGINAL_CLICK, "EyeTheia click"),
+            (CALIBRATION_COMPANY_GAZE, "Company dwell"),
         ],
     )
 
@@ -164,19 +177,6 @@ def select_calibration_point_count() -> int | None:
             (6, "6"),
         ],
     )
-# #新添加部分（输入分辨率）
-# def ask_screen_resolution():
-#     """
-#     让用户输入屏幕分辨率。
-#     如果用户直接回车，则默认使用 1920 x 1080。
-#     """
-#     screen_w = input("请输入屏幕宽度，例如 1920 或 2560，默认 1920：").strip()
-#     screen_h = input("请输入屏幕高度，例如 1080 或 1440，默认 1080：").strip()
-
-#     screen_w = int(screen_w) if screen_w else 1920
-#     screen_h = int(screen_h) if screen_h else 1080
-
-#     return screen_w, screen_h
 
 def main() -> None:
     """
@@ -191,12 +191,18 @@ def main() -> None:
         print("Model setup cancelled.")
         return
 
+    calibration_workflow = select_calibration_workflow()
+    if calibration_workflow is None:
+        print("Calibration mode setup cancelled.")
+        return
+
     calibration_point_count = select_calibration_point_count()
     if calibration_point_count is None:
         print("Calibration setup cancelled.")
         return
 
     print(f"Selected model: {selected_model}.")
+    print(f"Selected calibration mode: {calibration_workflow}.")
     print(f"Selected {calibration_point_count} calibration points.")
 
     # Retrieve the webcam URL from environment variables
@@ -209,22 +215,47 @@ def main() -> None:
         print("Unable to open webcam. Please check your device or URL.")
         return
 
-    if selected_model == MODEL_EYETHEIA_BASELINE:
+    if selected_model == MODEL_EYETHEIA_BASELINE and calibration_workflow == CALIBRATION_ORIGINAL_CLICK:
         from tracker.GazeTracker import GazeTracker
 
         gaze_tracker = GazeTracker(
             model_path="itracker_baseline.tar",
             calibration_point_count=calibration_point_count,
         )
-    elif selected_model == COMPANY_SWIN_MODEL_ID:
+    elif selected_model == MODEL_EYETHEIA_BASELINE and calibration_workflow == CALIBRATION_COMPANY_GAZE:
+        from company_gaze import CompanyGazeTracker
+        from tracker.GazeTracker import GazeTracker
+
+        eyetheia_finetune_tracker = GazeTracker(
+            model_path="itracker_baseline.tar",
+            calibration_point_count=calibration_point_count,
+        )
+        gaze_tracker = CompanyGazeTracker(
+            calibration_point_count=calibration_point_count,
+            eyetheia_finetune_tracker=eyetheia_finetune_tracker,
+            calibration_confirmation="dwell",
+            run_eyetheia_after_calibration=True,
+        )
+    elif selected_model == COMPANY_SWIN_MODEL_ID and calibration_workflow == CALIBRATION_ORIGINAL_CLICK:
         from company_gaze import CompanyGazeTracker
 
         gaze_tracker = CompanyGazeTracker(
             calibration_point_count=calibration_point_count,
-            calibration_mode="mapper",
+            calibration_mode="arc",
+            calibration_confirmation="click",
+        )
+    elif selected_model == COMPANY_SWIN_MODEL_ID and calibration_workflow == CALIBRATION_COMPANY_GAZE:
+        from company_gaze import CompanyGazeTracker
+
+        gaze_tracker = CompanyGazeTracker(
+            calibration_point_count=calibration_point_count,
+            calibration_mode="arc",
+            calibration_confirmation="dwell",
         )
     else:
-        raise ValueError(f"Unknown gaze model: {selected_model}")
+        raise ValueError(
+            f"Unknown model/calibration workflow: {selected_model}/{calibration_workflow}"
+        )
 
     try:
         gaze_tracker.run(webcam)

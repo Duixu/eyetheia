@@ -1,4 +1,9 @@
-from .company_gaze_mapper import CompanyGazeMapper, CompanyGazeSample
+from .company_gaze_mapper import (
+    CompanyArcGazeMapper,
+    CompanyArcGazeSample,
+    CompanyGazeMapper,
+    CompanyGazeSample,
+)
 
 try:
     from .utils import (
