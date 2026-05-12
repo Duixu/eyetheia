@@ -10,7 +10,7 @@ import mediapipe as mp
 import numpy as np
 
 from utils.company_gaze_mapper import CompanyArcGazeMapper
-from utils.config import MID_X, MID_Y, SCREEN_HEIGHT, SCREEN_WIDTH
+from utils.config import BATCH_SIZE, EPOCH, LR, MID_X, MID_Y, SCREEN_HEIGHT, SCREEN_WIDTH
 
 
 COMPANY_SWIN_MODEL_ID = "company_swin"
@@ -46,6 +46,7 @@ class CompanyGazeTracker:
         weight_path: str | None = None,
         calibration_mode: str = COMPANY_CALIBRATION_MAPPER,
         gaze_model_type: str = "swin",
+        eyetheia_finetune_tracker: Any | None = None,
     ) -> None:
         if calibration_mode not in (COMPANY_CALIBRATION_MAPPER, COMPANY_CALIBRATION_ARC):
             raise ValueError('company calibration mode must be "mapper" or "arc"')
@@ -55,6 +56,7 @@ class CompanyGazeTracker:
         self.calibration_points = get_numbered_calibration_points(calibration_point_count)
         self.weight_path = weight_path or DEFAULT_COMPANY_GAZE_WEIGHT_PATH
         self.calibration_mode = calibration_mode
+        self.eyetheia_finetune_tracker = eyetheia_finetune_tracker
 
         if not os.path.exists(self.weight_path):
             raise FileNotFoundError(f"Company gaze weight file not found: {self.weight_path}")
@@ -180,6 +182,7 @@ class CompanyGazeTracker:
         self.current_target = None
         self.calibration_done = False
         samples: list[tuple[float, float, float, float, tuple[float, float, float]]] = []
+        eyetheia_samples = []
 
         cv2.namedWindow(self.calibration_window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(self.calibration_window_name, self._mouse_callback)
@@ -203,7 +206,7 @@ class CompanyGazeTracker:
                     continue
 
                 target_x, target_y = self.current_target
-                result = self._estimate_company_gaze(img, face_mesh)
+                result, face_landmarks = self._estimate_company_gaze_with_landmarks(img, face_mesh)
                 if result is None:
                     print("No valid face landmarks for this calibration point; please keep looking at the target.")
                     continue
@@ -212,6 +215,15 @@ class CompanyGazeTracker:
                 yaw = float(result["yaw"])
                 face_center = self._coerce_face_center(result.get("face_center"))
                 samples.append((pitch, yaw, float(target_x), float(target_y), face_center))
+                if self.eyetheia_finetune_tracker is not None and face_landmarks is not None:
+                    eyetheia_samples.append(
+                        self._build_eyetheia_calibration_sample(
+                            img,
+                            face_landmarks,
+                            float(target_x),
+                            float(target_y),
+                        )
+                    )
                 print(
                     f"Captured company gaze sample {len(samples)}/{len(self.calibration_points)}: "
                     f"pitch={pitch:.4f}, yaw={yaw:.4f}, target=({target_x}, {target_y})"
@@ -232,6 +244,8 @@ class CompanyGazeTracker:
             "Company gaze calibration completed. "
             f"Mean mapper error: {self.mapper.mean_error_px():.2f}px"
         )
+        if self.eyetheia_finetune_tracker is not None:
+            self._fine_tune_eyetheia_tracker(eyetheia_samples)
         return self.mapper
 
     def predict_frame(
@@ -268,15 +282,72 @@ class CompanyGazeTracker:
         self.gaze_filter_y = self._new_filter()
 
     def _estimate_company_gaze(self, img: np.ndarray, face_mesh: Any) -> dict[str, Any] | None:
+        result, _ = self._estimate_company_gaze_with_landmarks(img, face_mesh)
+        return result
+
+    def _estimate_company_gaze_with_landmarks(
+        self,
+        img: np.ndarray,
+        face_mesh: Any,
+    ) -> tuple[dict[str, Any] | None, Any | None]:
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img_mp = face_mesh.process(img_rgb)
         if not img_mp.multi_face_landmarks:
-            return None
+            return None, None
 
-        landmarks_np = self._landmarks_to_pixels(img_mp.multi_face_landmarks[0], img.shape)
+        face_landmarks = img_mp.multi_face_landmarks[0]
+        landmarks_np = self._landmarks_to_pixels(face_landmarks, img.shape)
         if not self.estimator.is_landmarks_valid(landmarks_np):
-            return None
-        return self.estimator.forward(img, landmarks_np)
+            return None, face_landmarks
+        return self.estimator.forward(img, landmarks_np), face_landmarks
+
+    def _build_eyetheia_calibration_sample(
+        self,
+        img: np.ndarray,
+        face_landmarks: Any,
+        target_x: float,
+        target_y: float,
+    ):
+        if self.eyetheia_finetune_tracker is None:
+            raise RuntimeError("EyeTheia fine-tune tracker is not configured")
+
+        features = self.eyetheia_finetune_tracker.extract_features(
+            img,
+            face_landmarks,
+            SCREEN_WIDTH,
+            SCREEN_HEIGHT,
+        )
+        from utils.utils import pixels_to_gaze_cm
+
+        gaze_x, gaze_y = pixels_to_gaze_cm(target_x, target_y, SCREEN_WIDTH, SCREEN_HEIGHT)
+        return features, (gaze_x, gaze_y)
+
+    def _fine_tune_eyetheia_tracker(self, eyetheia_samples: list[Any]) -> None:
+        if not eyetheia_samples:
+            print("No EyeTheia calibration samples were collected; skipping EyeTheia fine-tuning.")
+            return
+
+        print(
+            "\nFine-tuning EyeTheia baseline with images captured during company gaze calibration..."
+        )
+        from tracker.CalibrationDataset import CalibrationDataset
+
+        self.eyetheia_finetune_tracker.reset_model()
+        dataset = CalibrationDataset(eyetheia_samples)
+        self.eyetheia_finetune_tracker.calibration.set_capture_points(eyetheia_samples)
+        self.eyetheia_finetune_tracker.train(
+            dataset,
+            epochs=EPOCH,
+            learning_rate=LR,
+            batch_size=BATCH_SIZE,
+        )
+        mean_error, std_error = (
+            self.eyetheia_finetune_tracker.calibration.evaluate_calibration_accuracy()
+        )
+        print(
+            "EyeTheia fine-tuning from company calibration images completed. "
+            f"Mean Error = {mean_error:.2f}, Std Dev = {std_error:.2f}"
+        )
 
     def _mouse_callback(self, event: int, x: int, y: int, flags: int, param: object) -> None:
         if event != cv2.EVENT_LBUTTONDOWN or self.calibration_done or self.current_target is not None:
