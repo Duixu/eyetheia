@@ -216,8 +216,8 @@ def select_startup_config() -> tuple[str, str, int] | None:
             "workflow",
             "2. Select calibration mode",
             [
-                (CALIBRATION_ORIGINAL_CLICK, "EyeTheia click"),
-                (CALIBRATION_COMPANY_GAZE, "Company dwell"),
+                (CALIBRATION_ORIGINAL_CLICK, "click"),
+                (CALIBRATION_COMPANY_GAZE, "gaze"),
             ],
         ),
         (
