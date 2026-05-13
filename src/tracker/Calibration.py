@@ -24,6 +24,7 @@ from utils.utils import (
     get_numbered_calibration_points,
     euclidan_distance_radius,
 )
+from utils.calibration_raw_features import CalibrationRawFeatureLogger
 from utils.config import SCREEN_WIDTH, SCREEN_HEIGHT
 from tracker.CalibrationDataset import CalibrationDataset
 
@@ -205,6 +206,7 @@ class Calibration:
         self.current_target = None
         self.current_index = 0
         self.calibration_done = False
+        raw_feature_logger = CalibrationRawFeatureLogger()
 
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
@@ -254,6 +256,14 @@ class Calibration:
                                     (gaze_x, gaze_y)
                                 )
                             )
+                            raw_feature_logger.log_sample(
+                                sample_index=len(self.capture_points) - 1,
+                                target_x_px=user_x,
+                                target_y_px=user_y,
+                                face_landmarks=face_landmarks,
+                                image_shape=img.shape,
+                                screen_size=(SCREEN_WIDTH, SCREEN_HEIGHT),
+                            )
 
                             print(
                                 f"Captured: Screen ({user_x}, {user_y}) "
@@ -267,5 +277,6 @@ class Calibration:
 
         cv2.destroyWindow(self.window_name)
         print("\nCalibration completed.")
+        print(f"Calibration raw features saved to {raw_feature_logger.csv_path}")
 
         return CalibrationDataset(self.capture_points)

@@ -10,6 +10,7 @@ import mediapipe as mp
 import numpy as np
 
 from utils.company_gaze_mapper import CompanyArcGazeMapper
+from utils.calibration_raw_features import CalibrationRawFeatureLogger
 from utils.config import BATCH_SIZE, EPOCH, LR, MID_X, MID_Y, SCREEN_HEIGHT, SCREEN_WIDTH
 
 
@@ -309,6 +310,7 @@ class CompanyGazeTracker:
         samples: list[tuple[float, float, float, float, tuple[float, float, float]]] = []
         eyetheia_samples = []
         dwell_started_at = time.perf_counter()
+        raw_feature_logger = CalibrationRawFeatureLogger()
 
         cv2.namedWindow(self.calibration_window_name, cv2.WINDOW_NORMAL)
         if self.calibration_confirmation == COMPANY_CONFIRMATION_CLICK:
@@ -353,6 +355,14 @@ class CompanyGazeTracker:
                 yaw = float(result["yaw"])
                 face_center = self._coerce_face_center(result.get("face_center"))
                 samples.append((pitch, yaw, float(target_x), float(target_y), face_center))
+                raw_feature_logger.log_sample(
+                    sample_index=len(samples) - 1,
+                    target_x_px=target_x,
+                    target_y_px=target_y,
+                    face_landmarks=face_landmarks,
+                    image_shape=img.shape,
+                    screen_size=(SCREEN_WIDTH, SCREEN_HEIGHT),
+                )
                 if self.eyetheia_finetune_tracker is not None and face_landmarks is not None:
                     eyetheia_samples.append(
                         self._build_eyetheia_calibration_sample(
@@ -383,6 +393,7 @@ class CompanyGazeTracker:
             "Company gaze calibration completed. "
             f"Mean mapper error: {self.mapper.mean_error_px():.2f}px"
         )
+        print(f"Calibration raw features saved to {raw_feature_logger.csv_path}")
         if self.eyetheia_finetune_tracker is not None:
             self._fine_tune_eyetheia_tracker(eyetheia_samples)
         return self.mapper

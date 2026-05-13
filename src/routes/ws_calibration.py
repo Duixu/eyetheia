@@ -46,6 +46,7 @@ import asyncio
 
 from tracker.CalibrationDataset import CalibrationDataset
 from utils.utils import decode_image_bytes, FaceLandmarks, pixels_to_gaze_cm, normalize_MPIIFaceGaze
+from utils.calibration_raw_features import CalibrationRawFeatureLogger
 from routes.dependency import get_tracker, get_capture_points, get_screen
 from utils.ws_codec import unpack_ws_message
 
@@ -63,6 +64,7 @@ async def ws_calibration(
 
     local_points = []
     screen_width, screen_height = screen
+    raw_feature_logger = None
 
     try:
         while True:
@@ -76,6 +78,7 @@ async def ws_calibration(
                     screen_width = int(scr["w"])
                     screen_height = int(scr["h"])
                 local_points.clear()
+                raw_feature_logger = CalibrationRawFeatureLogger()
                 await ws.send_text(json.dumps({"type":"ready","expected":17}))
                 continue
 
@@ -111,6 +114,16 @@ async def ws_calibration(
                     continue
 
             local_points.append(((face_input, left_eye_input, right_eye_input, face_grid_input), (x, y)))
+            if raw_feature_logger is None:
+                raw_feature_logger = CalibrationRawFeatureLogger()
+            raw_feature_logger.log_sample(
+                sample_index=index,
+                target_x_px=x_pixel,
+                target_y_px=y_pixel,
+                face_landmarks=face_landmarks,
+                image_shape=img.shape,
+                screen_size=(screen_width, screen_height),
+            )
 
             await ws.send_text(json.dumps({"type":"ack","i":index,"count":len(local_points),"total":17}))
 
@@ -131,7 +144,12 @@ async def ws_calibration(
                 capture_points.clear()
                 capture_points.extend(local_points)
 
-                await ws.send_text(json.dumps({"type":"result","message":"Calibration completed","total_points":17}))
+                await ws.send_text(json.dumps({
+                    "type":"result",
+                    "message":"Calibration completed",
+                    "total_points":17,
+                    "csv_path": raw_feature_logger.csv_path if raw_feature_logger else None,
+                }))
 
     except WebSocketDisconnect:
         return
